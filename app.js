@@ -1,7 +1,7 @@
 const config=window.GRANDMA_WATCH_CONFIG;
 const app=document.querySelector("#app"),subtitle=document.querySelector("#subtitle");
 const escapeHtml=(value)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const format=(value)=>value?new Intl.DateTimeFormat("ja-JP",{dateStyle:"short",timeStyle:"short"}).format(new Date(value)):"未取得";
+const format=(value)=>value?new Intl.DateTimeFormat("ja-JP",{dateStyle:"short",timeStyle:"short",timeZone:"Asia/Tokyo"}).format(new Date(value)):"未取得";
 
 async function token(){if(!config)throw new Error("config.jsが未設定です");await liff.init({liffId:config.liffId});if(!liff.isLoggedIn()){liff.login();return new Promise(()=>{});}const value=liff.getIDToken();if(!value)throw new Error("LINE認証を取得できません");return value;}
 async function api(base,action,{method="GET",body}={}){const idToken=await token();const response=await fetch(`${base}?action=${encodeURIComponent(action)}`,{method,headers:{authorization:`Bearer ${idToken}`,"content-type":"application/json"},body:body?JSON.stringify(body):undefined,cache:"no-store"});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message??"処理に失敗しました");return data;}
@@ -9,7 +9,29 @@ function stateName(value){return {NORMAL:"🟢 正常",CAUTION:"🟡 注意",REV
 function showError(error){app.innerHTML=`<div class="error">${escapeHtml(error.message)}</div>`;}
 function showLoading(){subtitle.textContent="読み込み中…";app.innerHTML='<section class="card" aria-busy="true">通信中です…</section>';}
 
-async function statusView(){const value=await api(config.familyApiUrl,"status");subtitle.textContent="現在の状態";app.innerHTML=`<section class="card"><div class="state">${stateName(value.status)}</div><div class="row"><span>最終通信</span><strong>${format(value.lastCommunicationAt)}</strong></div><div class="row"><span>位置更新</span><strong>${format(value.lastLocationAt)}</strong></div><div class="row"><span>現在地</span><strong>${escapeHtml(value.locationLabel)}</strong></div><div class="row"><span>バッテリー</span><strong>${value.batteryPercent??"-"}%</strong></div><div class="row"><span>充電</span><strong>${value.charging==null?"不明":value.charging?"しています":"していません"}</strong></div><div class="actions"><a class="button" href="?view=location">現在地を見る</a><a class="button secondary" href="?view=alerts">対応状況</a></div></section>`;}
+async function statusView(){
+  const value=await api(config.familyApiUrl,"status");
+  subtitle.textContent="現在の状態";
+  const management=value.viewer?.isAdmin===true?`<section class="card admin-management"><h2>管理</h2><p class="muted">BASIOを新しく登録するための一回限りのコードを発行します。</p><div class="actions"><button id="issue-enrollment-code" type="button">端末登録コードを発行</button></div><div id="enrollment-code-result" class="enrollment-result" aria-live="polite" hidden><p class="muted">端末登録コード</p><div class="enrollment-code"></div><p>15分間有効です。</p><p>有効期限（日本時間）: <strong class="enrollment-expiry"></strong></p><p class="muted">再発行する場合は画面を再読み込みしてください。</p></div><div id="enrollment-code-error" class="inline-error" role="alert" hidden></div></section>`:"";
+  app.innerHTML=`<section class="card"><div class="state">${stateName(value.status)}</div><div class="row"><span>最終通信</span><strong>${format(value.lastCommunicationAt)}</strong></div><div class="row"><span>位置更新</span><strong>${format(value.lastLocationAt)}</strong></div><div class="row"><span>現在地</span><strong>${escapeHtml(value.locationLabel)}</strong></div><div class="row"><span>バッテリー</span><strong>${value.batteryPercent??"-"}%</strong></div><div class="row"><span>充電</span><strong>${value.charging==null?"不明":value.charging?"しています":"していません"}</strong></div><div class="actions"><a class="button" href="?view=location">現在地を見る</a><a class="button secondary" href="?view=alerts">対応状況</a></div></section>${management}`;
+  if(value.viewer?.isAdmin!==true)return;
+  const button=document.querySelector("#issue-enrollment-code"),result=document.querySelector("#enrollment-code-result"),error=document.querySelector("#enrollment-code-error");
+  let requestStarted=false;
+  button.onclick=async()=>{
+    if(requestStarted)return;
+    requestStarted=true;button.disabled=true;button.textContent="発行中…";error.hidden=true;
+    try{
+      const issued=await api(config.adminApiUrl,"device-enrollment-code",{method:"POST",body:{}});
+      if(!/^[A-Za-z0-9]{12}$/.test(issued.enrollmentCode)||!Number.isFinite(Date.parse(issued.expiresAt)))throw new Error("invalid enrollment response");
+      result.querySelector(".enrollment-code").textContent=issued.enrollmentCode;
+      result.querySelector(".enrollment-expiry").textContent=format(issued.expiresAt);
+      result.hidden=false;button.textContent="発行済み";
+    }catch(_){
+      error.textContent="登録コードを発行できませんでした。通信状態を確認し、少し待ってから再度お試しください。";error.hidden=false;button.textContent="端末登録コードを発行";
+      setTimeout(()=>{requestStarted=false;button.disabled=false;},5000);
+    }
+  };
+}
 async function locationView(){const value=await api(config.familyApiUrl,"location");subtitle.textContent="現在地";app.innerHTML=`<section class="card"><div class="state">📍 ${escapeHtml(value.locationLabel)}</div><div class="row"><span>位置更新</span><strong>${format(value.updatedAt)}</strong></div>${value.latitude==null?"":`<div class="row"><span>緯度・経度</span><strong>${value.latitude}, ${value.longitude}</strong></div><div class="row"><span>精度</span><strong>±${value.accuracyM}m</strong></div><div class="actions"><a class="button" rel="external noreferrer" href="${escapeHtml(value.googleMapsUrl)}">地図を開く</a></div>`}</section>`;}
 async function phoneView(){const value=await api(config.familyApiUrl,"phone");subtitle.textContent="電話";app.innerHTML=`<section class="card"><p>${escapeHtml(value.displayName)}に電話しますか？</p><div class="actions"><a class="button" rel="external" href="tel:${escapeHtml(value.phoneNumber)}">電話する</a></div></section>`;}
 async function alertsView(){const value=await api(config.familyApiUrl,"active-alert");subtitle.textContent="対応状況";if(!value.items.length){app.innerHTML='<section class="card">現在対応が必要な通知はありません。</section>';return;}app.innerHTML=value.items.map(a=>`<section class="card"><div class="state">${stateName(a.severity)}</div><p>${escapeHtml(a.alertType)}</p><p>状態: ${escapeHtml(a.status)}</p><p>${a.assignee?`${escapeHtml(a.assignee)}さんが対応中`:"担当者なし"}</p><div class="actions">${a.status==="OPEN"?`<button data-claim="${a.id}">私が確認します</button>`:""}${a.canRespond?`<button data-result="${a.id}" data-value="CONTACT_OK">問題なし</button><button class="secondary" data-result="${a.id}" data-value="NO_CONTACT">連絡がつかない</button><button class="secondary" data-result="${a.id}" data-value="GOING_TO_HOME">家へ向かう</button><button class="secondary" data-other="${a.id}">その他</button>`:""}${a.status==="ASSIGNED"&&a.canRelease?`<button class="danger" data-release="${a.id}">担当を解除</button>`:""}</div></section>`).join("");app.onclick=async e=>{const target=e.target.closest("button");if(!target)return;try{if(target.dataset.claim)await api(config.familyApiUrl,"claim",{method:"POST",body:{alertId:target.dataset.claim}});if(target.dataset.result)await api(config.familyApiUrl,"result",{method:"POST",body:{alertId:target.dataset.result,result:target.dataset.value}});if(target.dataset.other){const comment=prompt("その他の内容（1〜500文字）");if(comment)await api(config.familyApiUrl,"result",{method:"POST",body:{alertId:target.dataset.other,result:"OTHER",comment}});}if(target.dataset.release&&confirm("担当を解除しますか？"))await api(config.familyApiUrl,"unassign",{method:"POST",body:{alertId:target.dataset.release}});await alertsView();}catch(error){showError(error);}};}

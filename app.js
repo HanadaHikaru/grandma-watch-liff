@@ -1,5 +1,5 @@
 const config=window.GRANDMA_WATCH_CONFIG;
-const liffRelease=Object.freeze({version:"1.0.0-rc.1",revision:"5de4fdd",builtAt:"2026-08-16T06:46:25.361Z"});
+const liffRelease=Object.freeze({version:"1.0.0-rc.1",revision:"5de4fdd",builtAt:"2026-08-16T06:46:48.155Z"});
 const app=document.querySelector("#app"),subtitle=document.querySelector("#subtitle");
 const escapeHtml=(value)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const format=(value)=>value?new Intl.DateTimeFormat("ja-JP",{dateStyle:"short",timeStyle:"short",timeZone:"Asia/Tokyo"}).format(new Date(value)):"未取得";

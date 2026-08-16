@@ -4,10 +4,11 @@ const escapeHtml=(value)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;",
 const format=(value)=>value?new Intl.DateTimeFormat("ja-JP",{dateStyle:"short",timeStyle:"short",timeZone:"Asia/Tokyo"}).format(new Date(value)):"未取得";
 
 async function token(){if(!config)throw new Error("config.jsが未設定です");await liff.init({liffId:config.liffId});if(!liff.isLoggedIn()){liff.login();return new Promise(()=>{});}const value=liff.getIDToken();if(!value)throw new Error("LINE認証を取得できません");return value;}
-async function api(base,action,{method="GET",body}={}){const idToken=await token();const response=await fetch(`${base}?action=${encodeURIComponent(action)}`,{method,headers:{authorization:`Bearer ${idToken}`,"content-type":"application/json"},body:body?JSON.stringify(body):undefined,cache:"no-store"});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message??"処理に失敗しました");return data;}
+async function api(base,action,{method="GET",body}={}){const idToken=await token();const response=await fetch(`${base}?action=${encodeURIComponent(action)}`,{method,headers:{authorization:`Bearer ${idToken}`,"content-type":"application/json"},body:body?JSON.stringify(body):undefined,cache:"no-store"});const data=await response.json().catch(()=>({}));if(!response.ok){const error=new Error(data.message??"処理に失敗しました");error.code=data.code;error.requestId=data.requestId;throw error;}return data;}
 function stateName(value){return {NORMAL:"見守り中",CAUTION:"少し気になる状態",REVIEW:"確認が必要です",EMERGENCY:"緊急確認が必要です"}[value]??"状態を確認中";}
 function severityName(value){return {CAUTION:"注意",REVIEW:"要確認",EMERGENCY:"緊急"}[value]??"要確認";}
 function alertReason(value){return {NO_COMMUNICATION:"端末からの通信が長時間届いていません",NO_LOCATION:"位置情報が長時間更新されていません",LOW_BATTERY:"端末のバッテリーが少なくなっています",MORNING_NO_REPORT:"今日の通信がまだ確認できていません"}[value]??"見守り状態の確認が必要です";}
+function invitationErrorMessage(error){const message=String(error?.message??"");if(message.includes("既に申請または登録"))return "このLINEアカウントは既に申請または登録されています。登録する家族本人のLINEで招待リンクを開いてください。";if(message.includes("招待が無効または期限切れ"))return "この招待リンクは使用済み、期限切れ、または無効です。ADMINに新しいリンクの発行を依頼してください。";if(message.includes("LINE認証"))return "LINE認証を確認できませんでした。LINEアプリ内でリンクを開き直してください。";const requestId=typeof error?.requestId==="string"&&/^[A-Za-z0-9._-]{1,100}$/.test(error.requestId)?` 問い合わせID: ${error.requestId}`:"";return `参加申請を送信できませんでした。通信状態を確認し、もう一度お試しください。${requestId}`;}
 function showError(error){app.innerHTML=`<div class="error">${escapeHtml(error.message)}</div>`;}
 function showLoading(){subtitle.textContent="読み込み中…";app.innerHTML='<section class="card" aria-busy="true">通信中です…</section>';}
 function copyInputValue(input){input.focus();input.select();input.setSelectionRange(0,input.value.length);if(typeof document.execCommand==="function"&&document.execCommand("copy"))return Promise.resolve();if(navigator.clipboard?.writeText)return navigator.clipboard.writeText(input.value);return Promise.reject(new Error("clipboard unavailable"));}
@@ -78,7 +79,20 @@ async function familyView(){
     }
   };
 }
-async function joinView(){const inviteToken=new URLSearchParams(location.search).get("token")??"";subtitle.textContent="家族参加申請";app.innerHTML=`<section class="card"><label>表示名<input id="name" maxlength="100"></label><label>続柄<input id="relation" maxlength="50"></label><div class="actions"><button id="apply">参加申請</button></div></section>`;document.querySelector("#apply").onclick=async()=>{await api(config.familyApiUrl,"apply-invitation",{method:"POST",body:{token:inviteToken,displayName:document.querySelector("#name").value,relation:document.querySelector("#relation").value}});app.innerHTML='<section class="card">申請しました。ADMINの承認をお待ちください。</section>';};}
+async function joinView(){
+  const inviteToken=new URLSearchParams(location.search).get("token")??"";subtitle.textContent="家族参加申請";
+  app.innerHTML=`<section class="card"><p>見守りグループへの参加を申請します。登録する家族本人のLINEで入力してください。</p><label>表示名<input id="name" maxlength="100" autocomplete="name" required></label><label>続柄<input id="relation" maxlength="50" required></label><div class="actions"><button id="apply" type="button">参加申請</button></div><div id="join-error" class="inline-error" role="alert" hidden></div></section>`;
+  const button=document.querySelector("#apply"),error=document.querySelector("#join-error");
+  button.onclick=async()=>{
+    if(button.disabled)return;error.hidden=true;
+    const displayName=document.querySelector("#name").value.trim(),relation=document.querySelector("#relation").value.trim();
+    if(inviteToken.length<32){error.textContent="招待リンクが無効です。ADMINに新しいリンクの発行を依頼してください。";error.hidden=false;return;}
+    if(!displayName||!relation){error.textContent="表示名と続柄を両方入力してください。";error.hidden=false;return;}
+    button.disabled=true;button.textContent="申請中…";
+    try{await api(config.familyApiUrl,"apply-invitation",{method:"POST",body:{token:inviteToken,displayName,relation}});app.innerHTML='<section class="card"><h2>参加申請を送信しました</h2><p>ADMINの承認後に見守り情報を確認できます。</p></section>';}
+    catch(cause){error.textContent=invitationErrorMessage(cause);error.hidden=false;button.disabled=false;button.textContent="参加申請";}
+  };
+}
 
 const views={status:statusView,location:locationView,phone:phoneView,history:historyView,alerts:alertsView,settings:settingsView,family:familyView,system:systemView,join:joinView};
 const selected=views[new URLSearchParams(location.search).get("view")??"status"];
